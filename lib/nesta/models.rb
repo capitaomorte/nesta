@@ -66,7 +66,7 @@ module Nesta
     end
 
     def abspath(options = {})
-      options[:locale] ||= current_locale
+      options[:locale] ||= Nesta::Translations.current_locale
       page_path = @filename.sub(Nesta::Config.page_path, '')
       suffix = (options[:locale]!=:omit && options[:locale] != Nesta::App.first_locale(self)) ? "?locale=#{options[:locale]}" : ""
       if index_page?
@@ -112,12 +112,8 @@ module Nesta
       metadata("keywords")
     end
     
-    def metadata(key, locale = current_locale)
-      (@metadata[locale] && @metadata[locale][key]) || (locale != :all && metadata(key, :all)) || nil
-    end
-
-    def locales()
-      @markup.keys == [:all] ? R18n.get.available_locales.map {|l| l.code} : @markup.keys 
+    def metadata(key)
+      @metadata[key]
     end
 
     def flagged_as?(flag)
@@ -126,20 +122,15 @@ module Nesta
     end
 
     private
-    
-    def markup(locale = current_locale)
-      @markup[locale] || (locale != :all && markup(:all)) || ''
-    end
-
-    def current_locale
-      current_app = Nesta::App.current_app
-      (current_app && current_app.current_locale) || locales.first
-    end
+      def markup
+        @markup
+      end
 
     def parse_metadata(paragraph, existing = nil)
+      retval = {}
       for line in paragraph.split("\n") do
         key, value = line.split(/\s*:\s*/, 2)
-        (retval ||= {})[key.downcase] = value.chomp
+        retval[key.downcase] = value.chomp
       end
       existing ? existing.merge(retval || {}) : retval
     end
@@ -180,19 +171,19 @@ module Nesta
       else
         markup[Nesta::App.first_locale] = text
       end
-      [metadata, markup]
+      [Translations::LocalizedObject.new(metadata), Translations::LocalizedObject.new(markup)]
     end
 
-    def convert_to_html(format, scope, text)
-      case format
-      when :mdown
-        Maruku.new(text).to_html
-      when :haml
-        Haml::Engine.new(text).to_html(scope)
-      when :textile
-        RedCloth.new(text).to_html
+      def convert_to_html(format, scope, text)
+        case format
+          when :mdown
+            Maruku.new(text).to_html
+          when :haml
+            Haml::Engine.new(text).to_html(scope)
+          when :textile
+            RedCloth.new(text).to_html
+          end
       end
-    end
   end
 
 
@@ -248,7 +239,7 @@ module Nesta
         "#{heading} - #{parent.heading}"
       elsif heading
         "#{heading} - #{Nesta::Config.title}"
-      elsif root?
+      elsif abspath == '/'
         Nesta::Config.title
       end
     end
@@ -298,9 +289,7 @@ module Nesta
     def categories
       paths = category_strings.map { |specifier| specifier.sub(/:-?\d+$/, '') }
       pages = valid_paths(paths).map { |p| Page.find_by_path(p) }
-      pages.select do |page|
-        page.locales.include? current_locale
-      end.sort do |x, y|
+      pages.sort do |x, y|
         x.heading.downcase <=> y.heading.downcase
       end
     end
@@ -313,7 +302,7 @@ module Nesta
     end
 
     def parent
-      if root?
+      if abspath == '/'
         nil
       else
         parent_path = File.dirname(path)
@@ -427,5 +416,88 @@ module Nesta
         end
         item
       end
-  end
+
+    end
+
+    module Translations
+      @@known_locales = []
+      @@fallback_locale = nil
+
+      def self.current_locale
+        current_app = Nesta::App.current_app if defined?(Nesta::App)
+        (current_app && current_app.current_locale) || @@fallback_locale
+      end
+
+      def self.known_locales=(locales)
+        @@known_locales = locales
+        @@fallback_locale ||= @@known_locales.first
+      end
+
+      def self.known_locales()
+        @@known_locales
+      end
+
+      def self.fallback_locale=(locale)
+        @@fallback_locale = locale
+        unless @@known_locales.include? locale
+          Kernel.warn("#{locale} is not known yet! Know only #{@@known_locales.join(", ")}")
+        end
+      end
+
+      def self.fallback_locale()
+        @@fallback_locale
+      end
+      # Stolen from https://github.com/jeremyevans/sequel/blob/master/lib/sequel/sql.rb
+      # 
+      if RUBY_VERSION < '1.9.0'
+        # If on Ruby 1.8, create a <tt>Sequel::BasicObject</tt> class that is similar to the
+        # the Ruby 1.9 +BasicObject+ class.  This is used in a few places where proxy
+        # objects are needed that respond to any method call.
+        class BasicObject
+          # The instance methods to not remove from the class when removing
+          # other methods.
+          KEEP_METHODS = %w"__id__ __send__ __metaclass__ instance_eval == equal? initialize method_missing inspect"
+
+          # Remove all but the most basic instance methods from the class.  A separate
+          # method so that it can be called again if necessary if you load libraries
+          # after Sequel that add instance methods to +Object+.
+          def self.remove_methods!
+            ((private_instance_methods + instance_methods) - KEEP_METHODS).each{|m| undef_method(m)}
+          end
+          remove_methods!
+        end
+      else
+        # If on 1.9, create a <tt>Sequel::BasicObject</tt> class that is just like the
+        # default +BasicObject+ class, except that missing constants are resolved in
+        # +Object+.  This allows the virtual row support to work with classes
+        # without prefixing them with ::, such as:
+        #
+        #   DB[:bonds].filter{maturity_date > Time.now}
+        class BasicObject < ::BasicObject
+          # Lookup missing constants in <tt>::Object</tt>
+          def self.const_missing(name)
+            ::Object.const_get(name)
+          end
+
+          # No-op method on ruby 1.9, which has a real +BasicObject+ class.
+          def self.remove_methods!
+          end
+        end
+      end
+      
+      class LocalizedObject < BasicObject
+        def initialize(locale_hash)
+          @stuff = locale_hash
+          Translations.known_locales |= @stuff.keys
+        end
+
+        def method_missing(name, *args)
+          # Kernel.puts "Called method_missing with #{name.to_s} and #{args.to_s}"
+          @stuff[Translations.current_locale].send(name, *args)
+        end
+
+      end
+    end
 end
+
+  

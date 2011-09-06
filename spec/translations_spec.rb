@@ -26,6 +26,7 @@ describe "Page with multiple translations" do
                 :translations => {
                   :en => {:heading => 'Carrot', :content =>'Carrots are good for you'},
                   :pt => {:heading => 'Cenoura', :content =>'Cenouras fazem bem'}})
+    debugger
     @page = Nesta::Page.find_by_path('carrots')
     stub_locale("en")
     @page.heading.should == 'Carrot'

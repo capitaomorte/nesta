@@ -83,7 +83,7 @@ module ModelFactory
     end
 
     def metatext_for(metadata)
-      (metadata || {}).map { |key, value| "#{key}: #{value}" }.join("\n")
+      (metadata || {}).map { |key, value| "#{key}: #{value}\n" }
     end
 
     def contents_for(options)
@@ -108,7 +108,7 @@ module ModelFactory
     def create_translated_file(path, options, translations)
       create_dirs(path)
       File.open(path, 'w') do |file|
-        file.write(metatext_for(options[:metadata]) + "\n")
+        file.write(metatext_for(options[:metadata]))
         translations.each_pair do |locale, locale_options|
           locale_options[:metadata] = (locale_options[:metadata] || {}).to_a
           locale_options[:metadata].unshift([:language, locale])
